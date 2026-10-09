@@ -1,0 +1,31 @@
+{
+  "mappings": {
+    "date_detection": false,
+    "properties": {
+      "RecordType": { "type": "keyword" },
+      "BinaryType": { "type": "keyword" },
+      "BinFileVersion": { "type": "keyword" },
+      "BinProductVersion": { "type": "keyword" },
+      "Usn": { "type": "unsigned_long" },
+      "FileKeyLastWriteTimestamp": { "type": "date" },
+      "VolumeIDLastWriteTimestamp": { "type": "date" },
+      "FileIDLastWriteTimestamp": { "type": "date" },
+      "KeyLastWriteTimestamp": { "type": "date" },
+      "LastWriteTimestamp": { "type": "date" },
+      "LinkDate": { "type": "date" },
+      "Created": { "type": "date" },
+      "LastModified": { "type": "date" },
+      "LastModifiedStore": { "type": "date" },
+      "InstallDateEpoch_a": { "type": "date" },
+      "InstallDateEpoch_b": { "type": "date" },
+      "InstallDate": { "type": "date" },
+      "InstallDateMsi": { "type": "date" },
+      "InstallDateArpLastModified": { "type": "date" },
+      "InstallDateFromLinkFile": { "type": "date" },
+      "DriverTimeStamp": { "type": "date" },
+      "DriverLastWriteTime": { "type": "date" },
+      "DriverVerDate": { "type": "date" },
+      "Date": { "type": "date" }
+    }
+  }
+}

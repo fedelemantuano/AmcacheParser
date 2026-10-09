@@ -23,8 +23,6 @@ using Serilog.Events;
 
 namespace AmcacheParser;
 
-using Amcache.Converters;
-
 internal class Program
 {
     private static readonly string _preciseTimeFormat = "yyyy-MM-dd HH:mm:ss.fffffff";
@@ -37,6 +35,8 @@ internal class Program
                                              "\r\n\t " +
                                              @"   AmcacheParser.exe -f ""C:\Temp\amcache\AmcacheWin10.hve"" -i --csv C:\temp --csvf foo.csv" + "\r\n\t " +
                                              @"   AmcacheParser.exe -f ""C:\Temp\amcache\AmcacheWin10.hve"" -w ""c:\temp\whitelist.txt"" --csv C:\temp" +
+                                             "\r\n\t " +
+                                             @"   AmcacheParser.exe -f ""C:\Temp\amcache\AmcacheWin10.hve"" --json C:\temp --jsonf results.json" +
                                              "\r\n\t" +
                                              "\r\n\t" +
                                              "    Short options (single letter) are prefixed with a single dash. Long commands are prefixed with two dashes";
@@ -58,7 +58,7 @@ internal class Program
         var csvOpt = new Option<string>(
             "--csv")
         {
-            Description = "Directory to save CSV formatted results to. Be sure to include the full path in double quotes"
+            Description = "Directory to save CSV formatted results to. This or --json is required"
         
         };
         
@@ -66,6 +66,15 @@ internal class Program
             "--csvf")
         {
             Description   = "File name to save CSV formatted results to. When present, overrides default name\r\n"
+        };
+
+        var jsonOpt = new Option<string>("--json")
+        {
+            Description = "Directory to save JSON Lines results to. This or --csv is required"
+        };
+        var jsonfOpt = new Option<string>("--jsonf")
+        {
+            Description = "File name for the single JSON Lines output. Overrides the default name; requires --json"
         };
         
         var iOpt = new Option<bool>(
@@ -92,13 +101,13 @@ internal class Program
         
         var dtOpt = new Option<string>(
             "--dt"){
-            Description =        "The custom date/time format to use when displaying time stamps. See https://goo.gl/CNVq0k for options",
+            Description =        "The custom date/time format for CSV and displayed timestamps. JSON always uses ISO 8601 UTC. See https://goo.gl/CNVq0k for options",
             DefaultValueFactory = _ => "yyyy-MM-dd HH:mm:ss"
         };
         
         var mpOpt = new Option<bool>("--mp")
         {
-            Description = "When true, display higher precision for timestamps",
+            Description = "When true, use higher precision for CSV and displayed timestamps. JSON always uses milliseconds",
             DefaultValueFactory = _ => false
         };
         
@@ -127,6 +136,8 @@ internal class Program
             bOpt,
             csvOpt,
             csvfOpt,
+            jsonOpt,
+            jsonfOpt,
             dtOpt,
             mpOpt,
             nlOpt,
@@ -137,11 +148,12 @@ internal class Program
         _rootCommand.Description = Header + "\r\n\r\n" +Footer;
 
         _rootCommand.SetAction(result => DoWork(result.GetValue(fOpt), result.GetValue(iOpt), result.GetValue(wOpt),
-            result.GetValue(bOpt), result.GetValue(csvOpt), result.GetValue(csvfOpt), result.GetValue(dtOpt),
+            result.GetValue(bOpt), result.GetValue(csvOpt), result.GetValue(csvfOpt),
+            result.GetValue(jsonOpt), result.GetValue(jsonfOpt), result.GetValue(dtOpt),
             result.GetValue(mpOpt),result.GetValue(nlOpt),result.GetValue(debugOpt),result.GetValue(traceOpt)));
             
 
-        var foo = _rootCommand.Parse(args).InvokeAsync();
+        Environment.ExitCode = await _rootCommand.Parse(args).InvokeAsync();
         
         Log.CloseAndFlush();
            
@@ -177,7 +189,7 @@ internal class Program
         }
     }
 
-    private static void DoWork(string f,bool i,string w,string b, string csv,string csvf,string dt,bool mp,bool nl,bool debug,bool trace)
+    private static int DoWork(string f,bool i,string w,string b, string csv,string csvf,string json,string jsonf,string dt,bool mp,bool nl,bool debug,bool trace)
     {
         var levelSwitch = new LoggingLevelSwitch();
 
@@ -217,22 +229,28 @@ internal class Program
             var aaa = new CustomHelpAction(new HelpAction());
             aaa.Invoke(_rootCommand.Parse("-f is required. Exiting"));
 
-            return;
+            return 1;
         }
         
-        if (string.IsNullOrEmpty(csv))
+        if (string.IsNullOrEmpty(csv) && string.IsNullOrEmpty(json))
         {
             var aaa = new CustomHelpAction(new HelpAction());
-            aaa.Invoke(_rootCommand.Parse("--csv is required. Exiting"));
+            aaa.Invoke(_rootCommand.Parse("--csv or --json is required. Exiting"));
 
-            return;
+            return 1;
+        }
+
+        if (!string.IsNullOrEmpty(jsonf) && string.IsNullOrEmpty(json))
+        {
+            Log.Error("--jsonf requires --json. Exiting");
+            return 1;
         }
         
         if (!File.Exists(f))
         {
             Log.Error("{F} not found. Exiting",f);
             Console.WriteLine();
-            return;
+            return 1;
         }
 
         Log.Information("{Header}",Header);
@@ -314,7 +332,7 @@ internal class Program
                         .ToList();
                 var totalProgramFileEntries2 = 0;
 
-                if (Directory.Exists(csv) == false)
+                if (!string.IsNullOrEmpty(csv) && Directory.Exists(csv) == false)
                 {
                     try
                     {
@@ -324,7 +342,7 @@ internal class Program
                     {
                         Log.Error(ex,"There was an error creating directory {Csv}. Error: {Message} Exiting",csv,ex.Message);
                         Console.WriteLine();
-                        return;
+                        return 1;
                     }
                 }
 
@@ -336,157 +354,24 @@ internal class Program
                 }
 
                 
-                var hiveName1 = Path.GetFileNameWithoutExtension(f);
-
-                var outbase1 = $"{ts1}_{hiveName1}_UnassociatedFileEntries.csv";
-
-                if (string.IsNullOrEmpty(csvf) == false)
+                if (!string.IsNullOrEmpty(csv))
                 {
-                    outbase1 =
-                        $"{Path.GetFileNameWithoutExtension(csvf)}_UnassociatedFileEntries{Path.GetExtension(csvf)}";
-                }
+                    var hiveName1 = Path.GetFileNameWithoutExtension(f);
 
-                var outFile1 = Path.Combine(csv, outbase1);
-
-                using (var sw = new StreamWriter(outFile1))
-                {
-                    sw.AutoFlush = true;
-
-                    var csvWriter = new CsvWriter(sw,CultureInfo.InvariantCulture);
-
-                    var o = new TypeConverterOptions
-                    {
-                        DateTimeStyle = DateTimeStyles.AssumeUniversal & DateTimeStyles.AdjustToUniversal
-                    };
-                    csvWriter.Context.TypeConverterOptionsCache.AddOptions<FileEntryNew>(o);
-
-                    var foo = csvWriter.Context.AutoMap<FileEntryNew>();
-
-                    foo.Map(m => m.ApplicationName).Index(0);
-
-                    foo.Map(m => m.ProgramId).Index(1);
-                    foo.Map(t => t.FileKeyLastWriteTimestamp).Convert(t =>
-                            t.Value.FileKeyLastWriteTimestamp.ToString(dt))
-                        .Index(2);
-                    foo.Map(m => m.SHA1).Index(3);
-                    foo.Map(m => m.IsOsComponent).Index(4);
-                    foo.Map(m => m.FullPath).Index(5);
-                    foo.Map(m => m.Name).Index(6);
-                    foo.Map(m => m.FileExtension).Index(7);
-
-                    foo.Map(t => t.LinkDate).Convert(
-                        t => t.Value.LinkDate == null ? string.Empty : t.Value.LinkDate?.ToString(dt)).Index(8);
-                    foo.Map(m => m.ProductName).TypeConverter<CustomNullTypeConverter<string>>().Index(9);
-
-                    foo.Map(m => m.Size).Index(10);
-
-                    foo.Map(m => m.Version).Index(11);
-                    foo.Map(m => m.ProductVersion).Index(12);
-
-                    foo.Map(m => m.LongPathHash).Index(13);
-
-                    foo.Map(m => m.BinaryType).Index(14);
-                    foo.Map(m => m.IsPeFile).Index(15);
-
-                    foo.Map(m => m.BinFileVersion).Index(16);
-                    foo.Map(m => m.BinProductVersion).Index(17);
-                        
-
-                    foo.Map(m => m.Language).Index(18);
-                    foo.Map(m => m.Publisher).Ignore();
-
-                    csvWriter.Context.RegisterClassMap(foo);
-                        
-                    csvWriter.WriteHeader<FileEntryNew>();
-                    csvWriter.NextRecord();
-                    csvWriter.WriteRecords(cleanList2);
-                }
-
-                if (i)
-                {
-                    outbase1 = $"{ts1}_{hiveName1}_ProgramEntries.csv";
+                    var outbase1 = $"{ts1}_{hiveName1}_UnassociatedFileEntries.csv";
 
                     if (string.IsNullOrEmpty(csvf) == false)
                     {
                         outbase1 =
-                            $"{Path.GetFileNameWithoutExtension(csvf)}_ProgramEntries{Path.GetExtension(csvf)}";
+                            $"{Path.GetFileNameWithoutExtension(csvf)}_UnassociatedFileEntries{Path.GetExtension(csvf)}";
                     }
 
-                    outFile1 = Path.Combine(csv, outbase1);
+                    var outFile1 = Path.Combine(csv, outbase1);
 
                     using (var sw = new StreamWriter(outFile1))
                     {
                         sw.AutoFlush = true;
 
-                        var csvWriter = new CsvWriter(sw,CultureInfo.InvariantCulture);
-
-                        var o = new TypeConverterOptions
-                        {
-                            DateTimeStyle = DateTimeStyles.AssumeUniversal & DateTimeStyles.AdjustToUniversal
-                        };
-                        csvWriter.Context.TypeConverterOptionsCache.AddOptions<ProgramsEntryNew>(o);
-
-                        var foo = csvWriter.Context.AutoMap<ProgramsEntryNew>();
-
-                        foo.Map(m => m.ProgramId).Index(0);
-                        foo.Map(t => t.KeyLastWriteTimestamp).Convert(t =>
-                                t.Value.KeyLastWriteTimestamp.ToString(dt))
-                            .Index(1);
-                        foo.Map(m => m.Name).Index(2);
-                        foo.Map(m => m.Version).Index(3);
-                        foo.Map(m => m.Publisher).Index(4);
-
-                        foo.Map(t => t.InstallDate).Convert(row =>
-                        {
-                            if (row.Value.InstallDate.HasValue)
-                            {
-                                return row.Value.InstallDate.Value.ToString(
-                                    dt);
-                            }
-
-                            return "";
-                        }).Index(5);
-
-                        foo.Map(m => m.OSVersionAtInstallTime).Index(6);
-
-                        foo.Map(m => m.BundleManifestPath).Index(7);
-                        foo.Map(m => m.HiddenArp).Index(8);
-                        foo.Map(m => m.InboxModernApp).Index(9);
-                        foo.Map(m => m.Language).Index(10);
-                        foo.Map(m => m.ManifestPath).Index(11);
-                        foo.Map(m => m.MsiPackageCode).Index(12);
-                        foo.Map(m => m.MsiProductCode).Index(13);
-
-                        foo.Map(m => m.PackageFullName).Index(14);
-                        foo.Map(m => m.ProgramInstanceId).Index(15);
-                        foo.Map(m => m.RegistryKeyPath).Index(16);
-                        foo.Map(m => m.RootDirPath).Index(17);
-
-                        foo.Map(m => m.Type).Index(18);
-                        foo.Map(m => m.Source).Index(19);
-                        foo.Map(m => m.StoreAppType).Index(20);
-
-                        foo.Map(m => m.UninstallString).Index(21);
-
-                        csvWriter.Context.RegisterClassMap(foo);
-                            
-                        csvWriter.WriteHeader<ProgramsEntryNew>();
-                        csvWriter.NextRecord();
-                        csvWriter.WriteRecords(amNew.ProgramsEntries);
-                    }
-
-                    outbase1 = $"{ts1}_{hiveName1}_AssociatedFileEntries.csv";
-
-                    if (string.IsNullOrEmpty(csvf) == false)
-                    {
-                        outbase1 =
-                            $"{Path.GetFileNameWithoutExtension(csvf)}_AssociatedFileEntries{Path.GetExtension(csvf)}";
-                    }
-
-                    outFile1 = Path.Combine(csv, outbase1);
-
-                    using (var sw = new StreamWriter(outFile1))
-                    {
                         var csvWriter = new CsvWriter(sw,CultureInfo.InvariantCulture);
 
                         var o = new TypeConverterOptions
@@ -495,338 +380,266 @@ internal class Program
                         };
                         csvWriter.Context.TypeConverterOptionsCache.AddOptions<FileEntryNew>(o);
 
-                        var foo = csvWriter.Context.AutoMap<FileEntryNew>();
-
-                        foo.Map(m => m.ApplicationName).Index(0);
-
-                        foo.Map(m => m.ProgramId).Index(1);
-                        foo.Map(t => t.FileKeyLastWriteTimestamp).Convert(t =>
-                                t.Value.FileKeyLastWriteTimestamp.ToString(dt))
-                            .Index(2);
-                        foo.Map(m => m.SHA1).Index(3);
-                        foo.Map(m => m.IsOsComponent).Index(4);
-                        foo.Map(m => m.FullPath).Index(5);
-                        foo.Map(m => m.Name).Index(6);
-                        foo.Map(m => m.FileExtension).Index(7);
-
-                        foo.Map(t => t.LinkDate).Convert(t =>
-                            t.Value.LinkDate?.ToString(dt)).Index(8);
-                        foo.Map(m => m.ProductName).Index(9);
-
-                        foo.Map(m => m.Size).Index(10);
-
-                        foo.Map(m => m.Version).Index(11);
-                        foo.Map(m => m.ProductVersion).Index(12);
-
-                        foo.Map(m => m.LongPathHash).Index(13);
-
-                        foo.Map(m => m.BinaryType).Index(14);
-                        foo.Map(m => m.IsPeFile).Index(15);
-
-                        foo.Map(m => m.BinFileVersion).Index(16);
-                        foo.Map(m => m.BinProductVersion).Index(17);
-
-                        foo.Map(m => m.Language).Index(18);
-                        foo.Map(m => m.Publisher).Ignore();
-
+                        var foo = ExportMaps.NewUnassociatedFile(csvWriter.Context, dt);
                         csvWriter.Context.RegisterClassMap(foo);
-                            
+
                         csvWriter.WriteHeader<FileEntryNew>();
                         csvWriter.NextRecord();
+                        csvWriter.WriteRecords(cleanList2);
+                    }
 
+                    if (i)
+                    {
+                        outbase1 = $"{ts1}_{hiveName1}_ProgramEntries.csv";
+
+                        if (string.IsNullOrEmpty(csvf) == false)
+                        {
+                            outbase1 =
+                                $"{Path.GetFileNameWithoutExtension(csvf)}_ProgramEntries{Path.GetExtension(csvf)}";
+                        }
+
+                        outFile1 = Path.Combine(csv, outbase1);
+
+                        using (var sw = new StreamWriter(outFile1))
+                        {
+                            sw.AutoFlush = true;
+
+                            var csvWriter = new CsvWriter(sw,CultureInfo.InvariantCulture);
+
+                            var o = new TypeConverterOptions
+                            {
+                                DateTimeStyle = DateTimeStyles.AssumeUniversal & DateTimeStyles.AdjustToUniversal
+                            };
+                            csvWriter.Context.TypeConverterOptionsCache.AddOptions<ProgramsEntryNew>(o);
+
+                            var foo = ExportMaps.NewProgram(csvWriter.Context, dt);
+                            csvWriter.Context.RegisterClassMap(foo);
+
+                            csvWriter.WriteHeader<ProgramsEntryNew>();
+                            csvWriter.NextRecord();
+                            csvWriter.WriteRecords(amNew.ProgramsEntries);
+                        }
+
+                        outbase1 = $"{ts1}_{hiveName1}_AssociatedFileEntries.csv";
+
+                        if (string.IsNullOrEmpty(csvf) == false)
+                        {
+                            outbase1 =
+                                $"{Path.GetFileNameWithoutExtension(csvf)}_AssociatedFileEntries{Path.GetExtension(csvf)}";
+                        }
+
+                        outFile1 = Path.Combine(csv, outbase1);
+
+                        using (var sw = new StreamWriter(outFile1))
+                        {
+                            var csvWriter = new CsvWriter(sw,CultureInfo.InvariantCulture);
+
+                            var o = new TypeConverterOptions
+                            {
+                                DateTimeStyle = DateTimeStyles.AssumeUniversal & DateTimeStyles.AdjustToUniversal
+                            };
+                            csvWriter.Context.TypeConverterOptionsCache.AddOptions<FileEntryNew>(o);
+
+                            var foo = ExportMaps.NewAssociatedFile(csvWriter.Context, dt);
+                            csvWriter.Context.RegisterClassMap(foo);
+
+                            csvWriter.WriteHeader<FileEntryNew>();
+                            csvWriter.NextRecord();
+
+                            sw.AutoFlush = true;
+
+                            foreach (var pe in amNew.ProgramsEntries)
+                            {
+                                var cleanList22 =
+                                    pe.FileEntries.Where(t => whitelistHashes1.Contains(t.SHA1) == useBlacklist2)
+                                        .ToList();
+
+                                csvWriter.WriteRecords(cleanList22);
+                            }
+                        }
+                    }
+
+
+                    outbase1 = $"{ts1}_{hiveName1}_ShortCuts.csv";
+
+                    if (string.IsNullOrEmpty(csvf) == false)
+                    {
+                        outbase1 =
+                            $"{Path.GetFileNameWithoutExtension(csvf)}_ShortCuts{Path.GetExtension(csvf)}";
+                    }
+
+                    outFile1 = Path.Combine(csv, outbase1);
+
+                    using (var sw = new StreamWriter(outFile1))
+                    {
+                        var csvWriter = new CsvWriter(sw,CultureInfo.InvariantCulture);
+
+                        var o = new TypeConverterOptions
+                        {
+                            DateTimeStyle = DateTimeStyles.AssumeUniversal & DateTimeStyles.AdjustToUniversal
+                        };
+                        csvWriter.Context.TypeConverterOptionsCache.AddOptions<Shortcut>(o);
+
+                        var foo = ExportMaps.Shortcut(csvWriter.Context, dt);
+                        csvWriter.Context.RegisterClassMap(foo);
+
+                        csvWriter.WriteHeader<Shortcut>();
+                        csvWriter.NextRecord();
                         sw.AutoFlush = true;
 
-                        foreach (var pe in amNew.ProgramsEntries)
+                        foreach (var sc in amNew.ShortCuts)
                         {
-                            var cleanList22 =
-                                pe.FileEntries.Where(t => whitelistHashes1.Contains(t.SHA1) == useBlacklist2)
-                                    .ToList();
+                            csvWriter.WriteRecord(sc);
+                            csvWriter.NextRecord();
+                        }
+                    }
 
-                            csvWriter.WriteRecords(cleanList22);
+                    outbase1 = $"{ts1}_{hiveName1}_DriverBinaries.csv";
+
+                    if (string.IsNullOrEmpty(csvf) == false)
+                    {
+                        outbase1 =
+                            $"{Path.GetFileNameWithoutExtension(csvf)}_DriverBinaries{Path.GetExtension(csvf)}";
+                    }
+
+                    outFile1 = Path.Combine(csv, outbase1);
+
+                    using (var sw = new StreamWriter(outFile1))
+                    {
+                        var csvWriter = new CsvWriter(sw,CultureInfo.InvariantCulture);
+
+
+                        var o = new TypeConverterOptions
+                        {
+                            DateTimeStyle = DateTimeStyles.AssumeUniversal & DateTimeStyles.AdjustToUniversal
+                        };
+                        csvWriter.Context.TypeConverterOptionsCache.AddOptions<DriverBinary>(o);
+
+                        var foo = ExportMaps.DriverBinary(csvWriter.Context, dt);
+                        csvWriter.Context.RegisterClassMap(foo);
+
+                        csvWriter.WriteHeader<DriverBinary>();
+                        csvWriter.NextRecord();
+                        sw.AutoFlush = true;
+
+                        foreach (var sc in amNew.DriveBinaries)
+                        {
+                            csvWriter.WriteRecord(sc);
+                            csvWriter.NextRecord();
+                        }
+                    }
+
+
+                    outbase1 = $"{ts1}_{hiveName1}_DeviceContainers.csv";
+
+                    if (string.IsNullOrEmpty(csvf) == false)
+                    {
+                        outbase1 =
+                            $"{Path.GetFileNameWithoutExtension(csvf)}_DeviceContainers{Path.GetExtension(csvf)}";
+                    }
+
+                    outFile1 = Path.Combine(csv, outbase1);
+
+                    using (var sw = new StreamWriter(outFile1))
+                    {
+                        var csvWriter = new CsvWriter(sw,CultureInfo.InvariantCulture);
+
+
+                        var o = new TypeConverterOptions
+                        {
+                            DateTimeStyle = DateTimeStyles.AssumeUniversal & DateTimeStyles.AdjustToUniversal
+                        };
+                        csvWriter.Context.TypeConverterOptionsCache.AddOptions<DeviceContainer>(o);
+
+                        var foo = ExportMaps.DeviceContainer(csvWriter.Context, dt);
+                        csvWriter.Context.RegisterClassMap(foo);
+
+                        csvWriter.WriteHeader<DeviceContainer>();
+                        csvWriter.NextRecord();
+                        sw.AutoFlush = true;
+
+                        foreach (var sc in amNew.DeviceContainers)
+                        {
+                            csvWriter.WriteRecord(sc);
+                            csvWriter.NextRecord();
+                        }
+                    }
+
+                    outbase1 = $"{ts1}_{hiveName1}_DriverPackages.csv";
+
+                    if (string.IsNullOrEmpty(csvf) == false)
+                    {
+                        outbase1 =
+                            $"{Path.GetFileNameWithoutExtension(csvf)}_DriverPackages{Path.GetExtension(csvf)}";
+                    }
+
+                    outFile1 = Path.Combine(csv, outbase1);
+
+                    using (var sw = new StreamWriter(outFile1))
+                    {
+                        var csvWriter = new CsvWriter(sw,CultureInfo.InvariantCulture);
+
+                        var o = new TypeConverterOptions
+                        {
+                            DateTimeStyle = DateTimeStyles.AssumeUniversal & DateTimeStyles.AdjustToUniversal
+                        };
+                        csvWriter.Context.TypeConverterOptionsCache.AddOptions<DriverPackage>(o);
+
+                        var foo = ExportMaps.DriverPackage(csvWriter.Context, dt);
+                        csvWriter.Context.RegisterClassMap(foo);
+
+                        csvWriter.WriteHeader<DriverPackage>();
+                        csvWriter.NextRecord();
+                        sw.AutoFlush = true;
+
+                        foreach (var sc in amNew.DriverPackages)
+                        {
+                            csvWriter.WriteRecord(sc);
+                            csvWriter.NextRecord();
+                        }
+                    }
+
+                    outbase1 = $"{ts1}_{hiveName1}_DevicePnps.csv";
+
+                    if (string.IsNullOrEmpty(csvf) == false)
+                    {
+                        outbase1 =
+                            $"{Path.GetFileNameWithoutExtension(csvf)}_DevicePnps{Path.GetExtension(csvf)}";
+                    }
+
+
+                    outFile1 = Path.Combine(csv, outbase1);
+
+                    using (var sw = new StreamWriter(outFile1))
+                    {
+                        var csvWriter = new CsvWriter(sw,CultureInfo.InvariantCulture);
+
+                        var o = new TypeConverterOptions
+                        {
+                            DateTimeStyle = DateTimeStyles.AssumeUniversal & DateTimeStyles.AdjustToUniversal
+                        };
+                        csvWriter.Context.TypeConverterOptionsCache.AddOptions<DevicePnp>(o);
+
+                        var foo = ExportMaps.DevicePnp(csvWriter.Context, dt);
+                        csvWriter.Context.RegisterClassMap(foo);
+
+                        csvWriter.WriteHeader<DevicePnp>();
+                        csvWriter.NextRecord();
+                        sw.AutoFlush = true;
+
+                        foreach (var sc in amNew.DevicePnps)
+                        {
+                            csvWriter.WriteRecord(sc);
+                            csvWriter.NextRecord();
                         }
                     }
                 }
 
-
-                outbase1 = $"{ts1}_{hiveName1}_ShortCuts.csv";
-
-                if (string.IsNullOrEmpty(csvf) == false)
+                if (!string.IsNullOrEmpty(json))
                 {
-                    outbase1 =
-                        $"{Path.GetFileNameWithoutExtension(csvf)}_ShortCuts{Path.GetExtension(csvf)}";
-                }
-
-                outFile1 = Path.Combine(csv, outbase1);
-
-                using (var sw = new StreamWriter(outFile1))
-                {
-                    var csvWriter = new CsvWriter(sw,CultureInfo.InvariantCulture);
-
-                    var o = new TypeConverterOptions
-                    {
-                        DateTimeStyle = DateTimeStyles.AssumeUniversal & DateTimeStyles.AdjustToUniversal
-                    };
-                    csvWriter.Context.TypeConverterOptionsCache.AddOptions<Shortcut>(o);
-
-                    var foo = csvWriter.Context.AutoMap<Shortcut>();
-
-                    foo.Map(m => m.KeyName).Index(0);
-                    foo.Map(m => m.LnkName).Index(1);
-
-                    foo.Map(t => t.KeyLastWriteTimestamp).Convert(t =>
-                        t.Value.KeyLastWriteTimestamp.ToString(dt)).Index(2);
-
-                    csvWriter.Context.RegisterClassMap(foo);
-                        
-                    csvWriter.WriteHeader<Shortcut>();
-                    csvWriter.NextRecord();
-                    sw.AutoFlush = true;
-
-                    foreach (var sc in amNew.ShortCuts)
-                    {
-                        csvWriter.WriteRecord(sc);
-                        csvWriter.NextRecord();
-                    }
-                }
-
-                outbase1 = $"{ts1}_{hiveName1}_DriverBinaries.csv";
-
-                if (string.IsNullOrEmpty(csvf) == false)
-                {
-                    outbase1 =
-                        $"{Path.GetFileNameWithoutExtension(csvf)}_DriverBinaries{Path.GetExtension(csvf)}";
-                }
-
-                outFile1 = Path.Combine(csv, outbase1);
-
-                using (var sw = new StreamWriter(outFile1))
-                {
-                    var csvWriter = new CsvWriter(sw,CultureInfo.InvariantCulture);
-
-
-                    var o = new TypeConverterOptions
-                    {
-                        DateTimeStyle = DateTimeStyles.AssumeUniversal & DateTimeStyles.AdjustToUniversal
-                    };
-                    csvWriter.Context.TypeConverterOptionsCache.AddOptions<DriverBinary>(o);
-
-                    var foo = csvWriter.Context.AutoMap<DriverBinary>();
-
-                    foo.Map(m => m.KeyName).Index(0);
-                    foo.Map(t => t.KeyLastWriteTimestamp).Convert(t =>
-                        t.Value.KeyLastWriteTimestamp.ToString(dt)).Index(1);
-                    foo.Map(t => t.DriverTimeStamp).Convert(t =>
-                        t.Value.DriverTimeStamp?.ToString(dt)).Index(2);
-                    foo.Map(t => t.DriverLastWriteTime).Convert(t =>
-                        t.Value.DriverLastWriteTime?.ToString(dt)).Index(3);
-
-                    foo.Map(m => m.DriverName).Index(4);
-
-                    foo.Map(m => m.DriverInBox).Index(5);
-                    foo.Map(m => m.DriverIsKernelMode).Index(6);
-                    foo.Map(m => m.DriverSigned).Index(7);
-                    foo.Map(m => m.DriverCheckSum).Index(8);
-                    foo.Map(m => m.DriverCompany).Index(9);
-                    foo.Map(m => m.DriverId).Index(10);
-                    foo.Map(m => m.DriverPackageStrongName).Index(11);
-                    foo.Map(m => m.DriverType).Index(12);
-                    foo.Map(m => m.DriverVersion).Index(13);
-                    foo.Map(m => m.ImageSize).Index(14);
-                    foo.Map(m => m.Inf).Index(15);
-                    foo.Map(m => m.Product).Index(16);
-                    foo.Map(m => m.ProductVersion).Index(17);
-                    foo.Map(m => m.Service).Index(18);
-                    foo.Map(m => m.WdfVersion).Index(19);
-
-                    csvWriter.Context.RegisterClassMap(foo);
-                        
-                    csvWriter.WriteHeader<DriverBinary>();
-                    csvWriter.NextRecord();
-                    sw.AutoFlush = true;
-
-                    foreach (var sc in amNew.DriveBinaries)
-                    {
-                        csvWriter.WriteRecord(sc);
-                        csvWriter.NextRecord();
-                    }
-                }
-
-
-                outbase1 = $"{ts1}_{hiveName1}_DeviceContainers.csv";
-
-                if (string.IsNullOrEmpty(csvf) == false)
-                {
-                    outbase1 =
-                        $"{Path.GetFileNameWithoutExtension(csvf)}_DeviceContainers{Path.GetExtension(csvf)}";
-                }
-
-                outFile1 = Path.Combine(csv, outbase1);
-
-                using (var sw = new StreamWriter(outFile1))
-                {
-                    var csvWriter = new CsvWriter(sw,CultureInfo.InvariantCulture);
-
-
-                    var o = new TypeConverterOptions
-                    {
-                        DateTimeStyle = DateTimeStyles.AssumeUniversal & DateTimeStyles.AdjustToUniversal
-                    };
-                    csvWriter.Context.TypeConverterOptionsCache.AddOptions<DeviceContainer>(o);
-
-                    var foo = csvWriter.Context.AutoMap<DeviceContainer>();
-
-                    foo.Map(m => m.KeyName).Index(0);
-                    foo.Map(t => t.KeyLastWriteTimestamp).Convert(t =>
-                        t.Value.KeyLastWriteTimestamp.ToString(dt)).Index(1);
-
-                    foo.Map(m => m.Categories).Index(2);
-
-                    foo.Map(m => m.DiscoveryMethod).Index(3);
-                    foo.Map(m => m.FriendlyName).Index(4);
-                    foo.Map(m => m.Icon).Index(5);
-                    foo.Map(m => m.IsActive).Index(6);
-                    foo.Map(m => m.IsConnected).Index(7);
-                    foo.Map(m => m.IsMachineContainer).Index(8);
-                    foo.Map(m => m.IsNetworked).Index(9);
-                    foo.Map(m => m.IsPaired).Index(10);
-                    foo.Map(m => m.Manufacturer).Index(11);
-                    foo.Map(m => m.ModelId).Index(12);
-                    foo.Map(m => m.ModelName).Index(13);
-                    foo.Map(m => m.ModelNumber).Index(14);
-                    foo.Map(m => m.PrimaryCategory).Index(15);
-                    foo.Map(m => m.State).Index(16);
-
-                    csvWriter.Context.RegisterClassMap(foo);
-                        
-                    csvWriter.WriteHeader<DeviceContainer>();
-                    csvWriter.NextRecord();
-                    sw.AutoFlush = true;
-
-                    foreach (var sc in amNew.DeviceContainers)
-                    {
-                        csvWriter.WriteRecord(sc);
-                        csvWriter.NextRecord();
-                    }
-                }
-
-                outbase1 = $"{ts1}_{hiveName1}_DriverPackages.csv";
-
-                if (string.IsNullOrEmpty(csvf) == false)
-                {
-                    outbase1 =
-                        $"{Path.GetFileNameWithoutExtension(csvf)}_DriverPackages{Path.GetExtension(csvf)}";
-                }
-
-                outFile1 = Path.Combine(csv, outbase1);
-
-                using (var sw = new StreamWriter(outFile1))
-                {
-                    var csvWriter = new CsvWriter(sw,CultureInfo.InvariantCulture);
-
-                    var o = new TypeConverterOptions
-                    {
-                        DateTimeStyle = DateTimeStyles.AssumeUniversal & DateTimeStyles.AdjustToUniversal
-                    };
-                    csvWriter.Context.TypeConverterOptionsCache.AddOptions<DriverPackage>(o);
-
-                    var foo = csvWriter.Context.AutoMap<DriverPackage>();
-
-                    csvWriter.Context.RegisterClassMap(foo);
-
-                    foo.Map(m => m.KeyName).Index(0);
-                    foo.Map(t => t.KeyLastWriteTimestamp).Convert(t =>
-                        t.Value.KeyLastWriteTimestamp.ToString(dt)).Index(1);
-                    foo.Map(t => t.Date)
-                        .Convert(t => t.Value.Date?.ToString(dt))
-                        .Index(2);
-
-                    foo.Map(m => m.Class).Index(3);
-
-                    foo.Map(m => m.Directory).Index(4);
-                    foo.Map(m => m.DriverInBox).Index(5);
-                    foo.Map(m => m.Hwids).Index(6);
-                    foo.Map(m => m.Inf).Index(7);
-                    foo.Map(m => m.Provider).Index(8);
-                    foo.Map(m => m.SubmissionId).Index(9);
-                    foo.Map(m => m.SYSFILE).Index(10);
-                    foo.Map(m => m.Version).Index(11);
-                    foo.Map(m => m.ClassGuid).Ignore();
-
-                    csvWriter.WriteHeader<DriverPackage>();
-                    csvWriter.NextRecord();
-                    sw.AutoFlush = true;
-
-                    foreach (var sc in amNew.DriverPackages)
-                    {
-                        csvWriter.WriteRecord(sc);
-                        csvWriter.NextRecord();
-                    }
-                }
-
-                outbase1 = $"{ts1}_{hiveName1}_DevicePnps.csv";
-
-                if (string.IsNullOrEmpty(csvf) == false)
-                {
-                    outbase1 =
-                        $"{Path.GetFileNameWithoutExtension(csvf)}_DevicePnps{Path.GetExtension(csvf)}";
-                }
-
-
-                outFile1 = Path.Combine(csv, outbase1);
-
-                using (var sw = new StreamWriter(outFile1))
-                {
-                    var csvWriter = new CsvWriter(sw,CultureInfo.InvariantCulture);
-
-                    var o = new TypeConverterOptions
-                    {
-                        DateTimeStyle = DateTimeStyles.AssumeUniversal & DateTimeStyles.AdjustToUniversal
-                    };
-                    csvWriter.Context.TypeConverterOptionsCache.AddOptions<DevicePnp>(o);
-
-                    var foo = csvWriter.Context.AutoMap<DevicePnp>();
-
-                    foo.Map(m => m.KeyName).Index(0);
-                    foo.Map(t => t.KeyLastWriteTimestamp).Convert(t =>
-                        t.Value.KeyLastWriteTimestamp.ToString(dt)).Index(1);
-
-                    foo.Map(m => m.BusReportedDescription).Index(2);
-
-                    foo.Map(m => m.Class).Index(3);
-                    foo.Map(m => m.ClassGuid).Index(4);
-                    foo.Map(m => m.Compid).Index(5);
-                    foo.Map(m => m.ContainerId).Index(6);
-                    foo.Map(m => m.Description).Index(7);
-                    foo.Map(m => m.DriverId).Index(8);
-                    foo.Map(m => m.DriverPackageStrongName).Index(9);
-                    foo.Map(m => m.DriverName).Index(10);
-                    foo.Map(m => m.DriverVerDate).Index(11);
-                    foo.Map(m => m.DriverVerVersion).Index(12);
-                    foo.Map(m => m.Enumerator).Index(13);
-                    foo.Map(m => m.HWID).Index(14);
-                    foo.Map(m => m.Inf).Index(15);
-                    foo.Map(m => m.InstallState).Index(16);
-                    foo.Map(m => m.Manufacturer).Index(17);
-                    foo.Map(m => m.MatchingId).Index(18);
-                    foo.Map(m => m.Model).Index(19);
-                    foo.Map(m => m.ParentId).Index(20);
-                    foo.Map(m => m.ProblemCode).Index(21);
-                    foo.Map(m => m.Provider).Index(22);
-                    foo.Map(m => m.Service).Index(23);
-                    foo.Map(m => m.Stackid).Index(24);
-                    foo.Map(m => m.DeviceState).Ignore();
-
-                    csvWriter.Context.RegisterClassMap(foo);
-                        
-                    csvWriter.WriteHeader<DevicePnp>();
-                    csvWriter.NextRecord();
-                    sw.AutoFlush = true;
-
-                    foreach (var sc in amNew.DevicePnps)
-                    {
-                        csvWriter.WriteRecord(sc);
-                        csvWriter.NextRecord();
-                    }
+                    var jsonPath = JsonExport.GetPath(json, jsonf, f, ts1);
+                    JsonExport.Write(jsonPath, amNew, cleanList2, i, whitelistHashes1, useBlacklist2);
+                    Log.Information("JSON Lines results saved to: {JsonPath}", jsonPath);
                 }
 
                 Console.WriteLine();
@@ -906,7 +719,10 @@ internal class Program
 
                 Console.WriteLine();
 
-                Log.Information("Results saved to: {Csv}",csv);
+                if (!string.IsNullOrEmpty(csv))
+                {
+                    Log.Information("Results saved to: {Csv}",csv);
+                }
 
 
                 Console.WriteLine();
@@ -915,7 +731,7 @@ internal class Program
                 Console.WriteLine();
 
 
-                return;
+                return 0;
             }
 
             Log.Debug($"Processing old format hive");
@@ -928,7 +744,7 @@ internal class Program
             {
                 Log.Warning("Hive did not contain program entries nor file entries. Exiting");
                 Console.WriteLine();
-                return;
+                return 0;
             }
 
             _sw.Stop();
@@ -972,7 +788,7 @@ internal class Program
                 am.UnassociatedFileEntries.Where(t => whitelistHashes.Contains(t.SHA1) == useBlacklist).ToList();
             var totalProgramFileEntries = 0;
 
-            if (Directory.Exists(csv) == false)
+            if (!string.IsNullOrEmpty(csv) && Directory.Exists(csv) == false)
             {
                 try
                 {
@@ -982,7 +798,7 @@ internal class Program
                 {
                     Log.Error(ex, "There was an error creating directory {Csv}. Error: {Message} Exiting",csv,ex.Message);
                     Console.WriteLine();
-                    return;
+                    return 1;
                 }
             }
 
@@ -994,151 +810,25 @@ internal class Program
                 totalProgramFileEntries += cleanList2.Count;
             }
 
-            //var ts = DateTime.Now.ToString("yyyyMMddHHmmss");
-            var hiveName = Path.GetFileNameWithoutExtension(f);
-
-            var outbase = $"{ts1}_{hiveName}_UnassociatedFileEntries.csv";
-
-            if (string.IsNullOrEmpty(csvf) == false)
+            if (!string.IsNullOrEmpty(csv))
             {
-                outbase =
-                    $"{Path.GetFileNameWithoutExtension(csvf)}_UnassociatedFileEntries{Path.GetExtension(csvf)}";
-            }
+                //var ts = DateTime.Now.ToString("yyyyMMddHHmmss");
+                var hiveName = Path.GetFileNameWithoutExtension(f);
 
-            var outFile = Path.Combine(csv, outbase);
-
-            using (var sw = new StreamWriter(outFile))
-            {
-                sw.AutoFlush = true;
-
-                var csvWriter = new CsvWriter(sw,CultureInfo.InvariantCulture);
-
-                var o = new TypeConverterOptions
-                {
-                    DateTimeStyle = DateTimeStyles.AssumeUniversal & DateTimeStyles.AdjustToUniversal
-                };
-                csvWriter.Context.TypeConverterOptionsCache.AddOptions<FileEntryOld>(o);
-
-                var foo = csvWriter.Context.AutoMap<FileEntryOld>();
-
-                foo.Map(m => m.ProgramName).Index(0);
-                foo.Map(m => m.ProgramID).Index(1);
-                foo.Map(m => m.VolumeID).Index(2);
-                foo.Map(t => t.VolumeIDLastWriteTimestamp).Convert(t =>
-                    t.Value.VolumeIDLastWriteTimestamp.ToString(dt)).Index(3);
-                foo.Map(m => m.FileID).Index(4);
-                foo.Map(t => t.FileIDLastWriteTimestamp).Convert(t =>
-                    t.Value.FileIDLastWriteTimestamp.ToString(dt)).Index(5);
-                foo.Map(m => m.SHA1).Index(6);
-                foo.Map(m => m.FullPath).Index(7);
-                foo.Map(m => m.FileExtension).Index(8);
-                foo.Map(m => m.MFTEntryNumber).Index(9);
-                foo.Map(m => m.MFTSequenceNumber).Index(10);
-                foo.Map(m => m.FileSize).TypeConverter<CustomNullTypeConverter<string>>().Index(11);
-                foo.Map(m => m.FileVersionString).Index(12);
-                foo.Map(m => m.FileVersionNumber).Index(13);
-                foo.Map(m => m.FileDescription).Index(14);
-
-                foo.Map(m => m.SizeOfImage).TypeConverter<CustomNullTypeConverter<string>>().Index(15);
-                foo.Map(m => m.PEHeaderHash).Index(16);
-                foo.Map(m => m.PEHeaderChecksum).TypeConverter<CustomNullTypeConverter<string>>().Index(17);
-
-                foo.Map(m => m.BinProductVersion).Index(18);
-                foo.Map(m => m.BinFileVersion).Index(19);
-                foo.Map(m => m.LinkerVersion).Index(20);
-                foo.Map(m => m.BinaryType).Index(21);
-                foo.Map(m => m.IsLocal).Index(22);
-                foo.Map(m => m.GuessProgramID).Index(23);
-
-                foo.Map(t => t.Created)
-                    .Convert(t => t.Value.Created == null ? string.Empty : t.Value.Created?.ToString(dt))
-                    .Index(24);
-                foo.Map(t => t.LastModified).Convert(t =>
-                    t.Value.LastModified == null ? string.Empty : t.Value.LastModified?.ToString(dt)).Index(25);
-                foo.Map(t => t.LastModifiedStore).Convert(t =>
-                    t.Value.LastModifiedStore == null ? string.Empty : t.Value.LastModifiedStore?.ToString(dt)).Index(26);
-                foo.Map(t => t.LinkDate)
-                    .Convert(t => t.Value.LinkDate == null ? string.Empty : t.Value.LinkDate?.ToString(dt))
-                    .Index(27);
-                foo.Map(m => m.LanguageID).TypeConverter<CustomNullTypeConverter<string>>().Index(28);
-
-                foo.Map(m => m.ProductName).TypeConverter<CustomNullTypeConverter<string>>().Index(29);
-                foo.Map(m => m.CompanyName).TypeConverter<CustomNullTypeConverter<string>>().Index(30);
-                foo.Map(m => m.SwitchBackContext).TypeConverter<CustomNullTypeConverter<string>>().Index(31);
-
-                csvWriter.Context.RegisterClassMap(foo);
-
-               
-
-                csvWriter.WriteHeader<FileEntryOld>();
-                csvWriter.NextRecord();
-                csvWriter.WriteRecords(cleanList);
-            }
-
-            if (i)
-            {
-                outbase = $"{ts1}_{hiveName}_ProgramEntries.csv";
+                var outbase = $"{ts1}_{hiveName}_UnassociatedFileEntries.csv";
 
                 if (string.IsNullOrEmpty(csvf) == false)
                 {
                     outbase =
-                        $"{Path.GetFileNameWithoutExtension(csvf)}_ProgramEntries{Path.GetExtension(csvf)}";
+                        $"{Path.GetFileNameWithoutExtension(csvf)}_UnassociatedFileEntries{Path.GetExtension(csvf)}";
                 }
 
-                outFile = Path.Combine(csv, outbase);
+                var outFile = Path.Combine(csv, outbase);
 
                 using (var sw = new StreamWriter(outFile))
                 {
                     sw.AutoFlush = true;
 
-                    var csvWriter = new CsvWriter(sw,CultureInfo.InvariantCulture);
-
-                    var o = new TypeConverterOptions
-                    {
-                        DateTimeStyle = DateTimeStyles.AssumeUniversal & DateTimeStyles.AdjustToUniversal
-                    };
-                    csvWriter.Context.TypeConverterOptionsCache.AddOptions<ProgramsEntryOld>(o);
-
-                    var foo = csvWriter.Context.AutoMap<ProgramsEntryOld>();
-
-                    foo.Map(m => m.ProgramID).Index(0);
-                    foo.Map(t => t.LastWriteTimestamp).Convert(t =>
-                        t.Value.LastWriteTimestamp.ToString(dt)).Index(1);
-                    foo.Map(m => m.ProgramName_0).Index(2);
-                    foo.Map(m => m.ProgramVersion_1).Index(3);
-                    foo.Map(m => m.VendorName_2).Index(4);
-
-                    foo.Map(t => t.InstallDateEpoch_a).Convert(t =>
-                        t.Value.InstallDateEpoch_a?.ToString(dt)).Index(5);
-                    foo.Map(t => t.InstallDateEpoch_b).Convert(t =>
-                        t.Value.InstallDateEpoch_b?.ToString(dt)).Index(6);
-
-                    foo.Map(m => m.LanguageCode_3).Index(7);
-                    foo.Map(m => m.InstallSource_6).Index(8);
-                    foo.Map(m => m.UninstallRegistryKey_7).Index(9);
-                    foo.Map(m => m.PathsList_d).Index(10);
-
-                    csvWriter.Context.RegisterClassMap(foo);
-
-          
-
-                    csvWriter.WriteHeader<ProgramsEntryOld>();
-                    csvWriter.NextRecord();
-                    csvWriter.WriteRecords(am.ProgramsEntries);
-                }
-
-                outbase = $"{ts1}_{hiveName}_AssociatedFileEntries.csv";
-
-                if (string.IsNullOrEmpty(csvf) == false)
-                {
-                    outbase =
-                        $"{Path.GetFileNameWithoutExtension(csvf)}_AssociatedFileEntries{Path.GetExtension(csvf)}";
-                }
-
-                outFile = Path.Combine(csv, outbase);
-
-                using (var sw = new StreamWriter(outFile))
-                {
                     var csvWriter = new CsvWriter(sw,CultureInfo.InvariantCulture);
 
                     var o = new TypeConverterOptions
@@ -1147,68 +837,90 @@ internal class Program
                     };
                     csvWriter.Context.TypeConverterOptionsCache.AddOptions<FileEntryOld>(o);
 
-                    var foo = csvWriter.Context.AutoMap<FileEntryOld>();
-
-                    foo.Map(m => m.ProgramName).Index(0);
-                    foo.Map(m => m.ProgramID).Index(1);
-                    foo.Map(m => m.VolumeID).Index(2);
-                    foo.Map(t => t.VolumeIDLastWriteTimestamp).Convert(t =>
-                            t.Value.VolumeIDLastWriteTimestamp.ToString(dt))
-                        .Index(3);
-                    foo.Map(m => m.FileID).Index(4);
-                    foo.Map(t => t.FileIDLastWriteTimestamp).Convert(t =>
-                            t.Value.FileIDLastWriteTimestamp.ToString(dt))
-                        .Index(5);
-                    foo.Map(m => m.SHA1).Index(6);
-                    foo.Map(m => m.FullPath).Index(7);
-                    foo.Map(m => m.FileExtension).Index(8);
-                    foo.Map(m => m.MFTEntryNumber).Index(9);
-                    foo.Map(m => m.MFTSequenceNumber).Index(10);
-                    foo.Map(m => m.FileSize).Index(11);
-                    foo.Map(m => m.FileVersionString).Index(12);
-                    foo.Map(m => m.FileVersionNumber).Index(13);
-                    foo.Map(m => m.FileDescription).Index(14);
-
-                    foo.Map(m => m.SizeOfImage).Index(15);
-                    foo.Map(m => m.PEHeaderHash).Index(16);
-                    foo.Map(m => m.PEHeaderChecksum).Index(17);
-
-                    foo.Map(m => m.BinProductVersion).Index(18);
-                    foo.Map(m => m.BinFileVersion).Index(19);
-                    foo.Map(m => m.LinkerVersion).Index(20);
-                    foo.Map(m => m.BinaryType).Index(21);
-                    foo.Map(m => m.IsLocal).Index(22);
-                    foo.Map(m => m.GuessProgramID).Index(23);
-
-                    foo.Map(t => t.Created)
-                        .Convert(t => t.Value.Created?.ToString(dt))
-                        .Index(24);
-                    foo.Map(t => t.LastModified).Convert(t =>
-                        t.Value.LastModified?.ToString(dt)).Index(25);
-                    foo.Map(t => t.LastModifiedStore).Convert(t =>
-                        t.Value.LastModifiedStore?.ToString(dt)).Index(26);
-                    foo.Map(t => t.LinkDate)
-                        .Convert(t => t.Value.LinkDate?.ToString(dt))
-                        .Index(27);
-                    foo.Map(m => m.LanguageID).Index(28);
-
-
+                    var foo = ExportMaps.OldUnassociatedFile(csvWriter.Context, dt);
                     csvWriter.Context.RegisterClassMap(foo);
-
 
                     csvWriter.WriteHeader<FileEntryOld>();
                     csvWriter.NextRecord();
+                    csvWriter.WriteRecords(cleanList);
+                }
 
-                    sw.AutoFlush = true;
+                if (i)
+                {
+                    outbase = $"{ts1}_{hiveName}_ProgramEntries.csv";
 
-                    foreach (var pe in am.ProgramsEntries)
+                    if (string.IsNullOrEmpty(csvf) == false)
                     {
-                        var cleanList2 =
-                            pe.FileEntries.Where(t => whitelistHashes.Contains(t.SHA1) == useBlacklist).ToList();
+                        outbase =
+                            $"{Path.GetFileNameWithoutExtension(csvf)}_ProgramEntries{Path.GetExtension(csvf)}";
+                    }
 
-                        csvWriter.WriteRecords(cleanList2);
+                    outFile = Path.Combine(csv, outbase);
+
+                    using (var sw = new StreamWriter(outFile))
+                    {
+                        sw.AutoFlush = true;
+
+                        var csvWriter = new CsvWriter(sw,CultureInfo.InvariantCulture);
+
+                        var o = new TypeConverterOptions
+                        {
+                            DateTimeStyle = DateTimeStyles.AssumeUniversal & DateTimeStyles.AdjustToUniversal
+                        };
+                        csvWriter.Context.TypeConverterOptionsCache.AddOptions<ProgramsEntryOld>(o);
+
+                        var foo = ExportMaps.OldProgram(csvWriter.Context, dt);
+                        csvWriter.Context.RegisterClassMap(foo);
+
+                        csvWriter.WriteHeader<ProgramsEntryOld>();
+                        csvWriter.NextRecord();
+                        csvWriter.WriteRecords(am.ProgramsEntries);
+                    }
+
+                    outbase = $"{ts1}_{hiveName}_AssociatedFileEntries.csv";
+
+                    if (string.IsNullOrEmpty(csvf) == false)
+                    {
+                        outbase =
+                            $"{Path.GetFileNameWithoutExtension(csvf)}_AssociatedFileEntries{Path.GetExtension(csvf)}";
+                    }
+
+                    outFile = Path.Combine(csv, outbase);
+
+                    using (var sw = new StreamWriter(outFile))
+                    {
+                        var csvWriter = new CsvWriter(sw,CultureInfo.InvariantCulture);
+
+                        var o = new TypeConverterOptions
+                        {
+                            DateTimeStyle = DateTimeStyles.AssumeUniversal & DateTimeStyles.AdjustToUniversal
+                        };
+                        csvWriter.Context.TypeConverterOptionsCache.AddOptions<FileEntryOld>(o);
+
+                        var foo = ExportMaps.OldAssociatedFile(csvWriter.Context, dt);
+                        csvWriter.Context.RegisterClassMap(foo);
+
+                        csvWriter.WriteHeader<FileEntryOld>();
+                        csvWriter.NextRecord();
+
+                        sw.AutoFlush = true;
+
+                        foreach (var pe in am.ProgramsEntries)
+                        {
+                            var cleanList2 =
+                                pe.FileEntries.Where(t => whitelistHashes.Contains(t.SHA1) == useBlacklist).ToList();
+
+                            csvWriter.WriteRecords(cleanList2);
+                        }
                     }
                 }
+            }
+
+            if (!string.IsNullOrEmpty(json))
+            {
+                var jsonPath = JsonExport.GetPath(json, jsonf, f, ts1);
+                JsonExport.Write(jsonPath, am, cleanList, i, whitelistHashes, useBlacklist);
+                Log.Information("JSON Lines results saved to: {JsonPath}", jsonPath);
             }
 
             Console.WriteLine();
@@ -1264,12 +976,16 @@ internal class Program
 
             Console.WriteLine();
 
-            Log.Information("Results saved to: {Csv}",csv);
+            if (!string.IsNullOrEmpty(csv))
+            {
+                Log.Information("Results saved to: {Csv}",csv);
+            }
 
 
             Console.WriteLine();
             Log.Information("Total parsing time: {TotalSeconds:N3} seconds",_sw.Elapsed.TotalSeconds);
             Console.WriteLine();
+            return 0;
         }
         catch (Exception ex)
         {
@@ -1292,6 +1008,8 @@ internal class Program
                 }
 
             }
+
+            return 1;
         }
     }
     

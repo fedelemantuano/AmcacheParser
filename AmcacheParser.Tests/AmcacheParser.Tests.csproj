@@ -1,0 +1,16 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>net9.0</TargetFramework>
+    <LangVersion>10</LangVersion>
+    <IsPackable>false</IsPackable>
+    <IsTestProject>true</IsTestProject>
+  </PropertyGroup>
+  <ItemGroup>
+    <PackageReference Include="Microsoft.NET.Test.Sdk" Version="17.14.1" />
+    <PackageReference Include="NUnit" Version="4.5.1" />
+    <PackageReference Include="NUnit3TestAdapter" Version="5.0.0" />
+    <ProjectReference Include="../AmcacheParser/AmcacheParser.csproj" />
+    <None Update="Fixtures/*.hve" CopyToOutputDirectory="PreserveNewest" />
+    <None Include="../docs/elasticsearch-mapping.json" Link="elasticsearch-mapping.json" CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
+</Project>

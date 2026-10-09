@@ -7,6 +7,8 @@ Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "AmcacheParser", "AmcachePar
 EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Amcache", "Amcache\Amcache.csproj", "{40985D54-63E8-4B25-86CC-292CCCFEA478}"
 EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "AmcacheParser.Tests", "AmcacheParser.Tests\AmcacheParser.Tests.csproj", "{909F5CB2-98B8-4134-BFD3-984880883A17}"
+EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
 		Debug|Any CPU = Debug|Any CPU
@@ -21,6 +23,10 @@ Global
 		{40985D54-63E8-4B25-86CC-292CCCFEA478}.Debug|Any CPU.Build.0 = Debug|Any CPU
 		{40985D54-63E8-4B25-86CC-292CCCFEA478}.Release|Any CPU.ActiveCfg = Release|Any CPU
 		{40985D54-63E8-4B25-86CC-292CCCFEA478}.Release|Any CPU.Build.0 = Release|Any CPU
+		{909F5CB2-98B8-4134-BFD3-984880883A17}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{909F5CB2-98B8-4134-BFD3-984880883A17}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{909F5CB2-98B8-4134-BFD3-984880883A17}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{909F5CB2-98B8-4134-BFD3-984880883A17}.Release|Any CPU.Build.0 = Release|Any CPU
 	EndGlobalSection
 	GlobalSection(SolutionProperties) = preSolution
 		HideSolutionNode = FALSE
